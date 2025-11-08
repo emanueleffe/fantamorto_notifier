@@ -1,0 +1,14 @@
+*.db
+*.log
+__pycache__/*
+.env/*
+.env
+.venv/*
+env/*
+venv/*
+.DS_Store
+.idea/*
+.vscode/*
+conf/telegram_config.ini
+conf/email_config.ini
+*.csv
