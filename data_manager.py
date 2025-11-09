@@ -2,7 +2,8 @@ import sqlite3
 import os
 import logging
 import csv
-from telegram_notification import send_telegram_notification, send_specific_telegram_notification
+import concurrent.futures
+from telegram_notification import get_global_chat_id, send_specific_telegram_notification
 from email_notification import send_email_notification
 from datetime import datetime
 
@@ -46,13 +47,6 @@ def create_database_and_tables(DATABASE_FILE):
         logging.error(f"Error while creating db file: {e}")
 
 
-def create_database_and_tables(DATABASE_FILE):
-    try:
-        execute_sql_file(DATABASE_FILE, 'db/schema.sql')
-        logging.info("db ok.")
-    except sqlite3.Error as e:
-        logging.error(f"Error while creating db file: {e}")
-
 def get_id_from_cache(DATABASE_FILE, person_name):
     conn = None
     try:
@@ -88,8 +82,8 @@ def save_id_to_cache(DATABASE_FILE, person_name, wikidata_id):
 
 def get_team_data_from_files(folder):
     """
-    Format: "Nome squadra - Nome proprietario - test@email.com - 12345678.csv"
-    Returns: dict {"Nome Squadra": {"owner": "...", "people": {...}, "email": "...", "chat_id": "..."}}
+    Format: "Nome squadra - Nome proprietario - test@email.com - 12345678 - ALL.csv"
+    Returns: dict {"Nome Squadra": {"owner": "...", "people": {...}, "email": "...", "chat_id": "...", "notifica_tutti": 0/1}}
     """
     all_people_names = set()
     team_associations = {}
@@ -114,6 +108,7 @@ def get_team_data_from_files(folder):
         owner_name = parts[1] if len(parts) > 1 else "N/A"
         email_notifica = None
         chat_id_notifica = None
+        notifica_tutti = 0
         
         if len(parts) > 2:
             for part in parts[2:]:
@@ -121,6 +116,8 @@ def get_team_data_from_files(folder):
                     email_notifica = part
                 elif part.isdigit():
                     chat_id_notifica = part
+                elif part.upper() == 'ALL':
+                    notifica_tutti = 1
         
         team_people = set()
         try:
@@ -136,7 +133,8 @@ def get_team_data_from_files(folder):
                 "owner": owner_name,
                 "people": team_people,
                 "email": email_notifica,
-                "chat_id": chat_id_notifica
+                "chat_id": chat_id_notifica,
+                "notifica_tutti": notifica_tutti
             }
         except Exception as e:
             logging.error(f"Error while reading file '{filename}': {e}")
@@ -190,24 +188,30 @@ def associate_teams(DATABASE_FILE, team_associations):
         if teams_to_add:
             logging.info(f"Adding {len(teams_to_add)} new teams.")
             insert_data = [
-                (name, team_associations[name]["owner"], team_associations[name]["email"], team_associations[name]["chat_id"])
+                (name, 
+                 team_associations[name]["owner"], 
+                 team_associations[name]["email"], 
+                 team_associations[name]["chat_id"],
+                 team_associations[name]["notifica_tutti"])
                 for name in teams_to_add
             ]
-            c.executemany("INSERT INTO squadre (nome_squadra, nome_proprietario, email_notifica, tg_chat_id_notifica) VALUES (?, ?, ?, ?)",
+            c.executemany("INSERT INTO squadre (nome_squadra, nome_proprietario, email_notifica, tg_chat_id_notifica, notifica_tutti) VALUES (?, ?, ?, ?, ?)",
                             insert_data)
         
         if teams_to_remove:
-            logging.info(f"Removing {len(teams_to_remove)} old teams.")
             c.executemany("DELETE FROM squadre WHERE nome_squadra = ?", [(name,) for name in teams_to_remove])
         
         teams_to_update = file_teams & db_teams
         if teams_to_update:
-            logging.info(f"Updating {len(teams_to_update)} existing teams.")
             update_data = [
-                (team_associations[name]["owner"], team_associations[name]["email"], team_associations[name]["chat_id"], name)
+                (team_associations[name]["owner"], 
+                 team_associations[name]["email"], 
+                 team_associations[name]["chat_id"], 
+                 team_associations[name]["notifica_tutti"],
+                 name)
                 for name in teams_to_update
             ]
-            c.executemany("UPDATE squadre SET nome_proprietario = ?, email_notifica = ?, tg_chat_id_notifica = ? WHERE nome_squadra = ?",
+            c.executemany("UPDATE squadre SET nome_proprietario = ?, email_notifica = ?, tg_chat_id_notifica = ?, notifica_tutti = ? WHERE nome_squadra = ?",
                             update_data)
 
         conn.commit()
@@ -236,7 +240,6 @@ def associate_teams(DATABASE_FILE, team_associations):
             c.executemany("INSERT OR IGNORE INTO persone_squadre (id_squadra, id_persona) VALUES (?, ?)", list(links_to_add))
         
         if links_to_remove:
-            logging.info(f"Removeing {len(links_to_remove)} obsolete team-person links.")
             c.executemany("DELETE FROM persone_squadre WHERE id_squadra = ? AND id_persona = ?", list(links_to_remove))
 
         if not links_to_add and not links_to_remove:
@@ -297,94 +300,136 @@ def insert_or_update_person(DATABASE_FILE, original_name, data):
             conn.close()
 
 
-def process_notifications(DATABASE_FILE):
+def queue_new_death_notifications(DATABASE_FILE):
     conn = None
+    GLOBAL_ADMIN_CHAT_ID = get_global_chat_id()
+    
     try:
         conn = sqlite3.connect(DATABASE_FILE)
         c = conn.cursor()
         
         c.execute('''
-            SELECT id_persona, nome_originale, nome_wikidata, data_di_nascita, data_di_morte, link_wikidata 
+            SELECT id_persona, nome_originale, data_di_nascita, data_di_morte, link_wikidata 
             FROM persone
             WHERE data_di_morte IS NOT NULL AND notifica_inviata = 0
         ''')
-        
         people_to_notify = c.fetchall()
         
         if not people_to_notify:
             return # nothing to do
 
-        for (person_id, original_name, wikidata_name, birth_date, death_date, wikidata_url) in people_to_notify:
-            
-            logging.warning(f"'{original_name}' is dead. Processing notifications.")
+        c.execute("SELECT nome_squadra, email_notifica, tg_chat_id_notifica, notifica_tutti FROM squadre WHERE email_notifica IS NOT NULL OR tg_chat_id_notifica IS NOT NULL")
+        all_subscribers = c.fetchall()
+
+        for (person_id, original_name, birth_date, death_date, wikidata_url) in people_to_notify:
             
             age = calculate_age(birth_date, death_date)
+            age_text = f"({age} anni)" if age is not None else ""
             
-            c.execute('''
-                SELECT T2.nome_squadra FROM persone_squadre AS T1
-                JOIN squadre AS T2 ON T1.id_squadra = T2.id_squadra
-                WHERE T1.id_persona = ?
-            ''', (person_id,))
-            teams = c.fetchall()
-            teams_list = [row[0] for row in teams]
-            teams_text = "\Teams: " + ", ".join(teams_list) if teams_list else ""
+            c.execute("SELECT T2.nome_squadra FROM persone_squadre AS T1 JOIN squadre AS T2 ON T1.id_squadra = T2.id_squadra WHERE T1.id_persona = ?", (person_id,))
+            teams_of_dead_person = {row[0] for row in c.fetchall()}
 
-            telegram_message = (
-                f"** † *{original_name.upper()}* † **\n\n"
-                f"Date of birth: {birth_date}\n"
-                f"Date of death: {death_date}\n"
-                f"Age at death: {age}\n"
-                f"Link: {wikidata_url}"
-                f"{teams_text}"
+            base_telegram_message = (
+                f"NECROLOGIO FANTAMORTO\n=================================\n\n"
+                f"† *{original_name.upper()}* †\n\n"
+                f"Data di nascita: {birth_date}\n"
+                f"Data di morte: {death_date} {age_text}\n"
+                f"Link Wikidata:\n{wikidata_url}\n"
+                f"---------------------------------\n\n"
+                f"Squadre: {', '.join(teams_of_dead_person) if teams_of_dead_person else 'N/A'}"
             )
-            
-            email_subject = f"FantaMorto Notification: {original_name} is dead"
+            email_subject = f"†FantaMorto† Notifica: Decesso - {original_name} {age_text}"
             email_body = (
-                f"† {original_name} † \n\n"
-                f"Date of birth: {birth_date}\n"
-                f"Date of death: {death_date}\n"
-                f"Age at death: {age}\n"
-                f"Link: {wikidata_url}"
-                f"{teams_text}"
+                f"NECROLOGIO FANTAMORTO\n=================================\n\n"
+                f"† {original_name.upper()} †\n\n"
+                f"Data di nascita: {birth_date}\n"
+                f"Data di morte: {death_date} {age_text}\n"
+                f"Link Wikidata:\n{wikidata_url}\n"
+                f"---------------------------------\n\n"
+                f"Squadre: {', '.join(teams_of_dead_person) if teams_of_dead_person else 'N/A'}"
             )
-            
-            is_global_notification_sent = send_telegram_notification(telegram_message)
-            
-            notifica_inviata_flag = 0
-            if is_global_notification_sent:
-                notifica_inviata_flag = 1
-                logging.info(f"Global notification for '{original_name}' sent. Flag set to 1.")
-            else:
-                logging.error(f"Unable to send global notification for '{original_name}'. Flag not updated. Trying again next time.")
-                continue
 
-            if teams_list:
-                logging.info(f"Sending specific notifications to {len(teams_list)} team(s)...")
-                
-                c.execute(f'''
-                    SELECT email_notifica, tg_chat_id_notifica, nome_squadra
-                    FROM squadre
-                    WHERE nome_squadra IN ({",".join(["?"] * len(teams_list))})
-                ''', teams_list)
-                
-                squadre_notifiche = c.fetchall()
-                
-                for (email, chat_id, nome_squadra) in squadre_notifiche:
-                    
+            if GLOBAL_ADMIN_CHAT_ID:
+                admin_msg = "*FANTAMORTO*\n\n" + base_telegram_message
+                c.execute("INSERT INTO notifiche_coda (tipo, indirizzo, corpo) VALUES ('telegram', ?, ?)", (GLOBAL_ADMIN_CHAT_ID, admin_msg))
+            
+            for (nome_squadra, email, chat_id, notifica_tutti) in all_subscribers:
+                is_own_team = nome_squadra in teams_of_dead_person
+                wants_all_notifications = (notifica_tutti == 1)
+
+                if is_own_team or wants_all_notifications:
                     if email:
-                        logging.info(f"Sending Email to '{nome_squadra}' at {email}...")
-                        send_email_notification(email, email_subject, email_body)
+                        c.execute("INSERT INTO notifiche_coda (tipo, indirizzo, oggetto, corpo) VALUES ('email', ?, ?, ?)", (email, email_subject, email_body))
                     
                     if chat_id:
-                        logging.info(f"Sending Telegram to '{nome_squadra}'...")
-                        team_message = f"*FANTAMORTO - {nome_squadra}*\n" + telegram_message
-                        send_specific_telegram_notification(chat_id, team_message)
+                        if is_own_team:
+                            team_message = f"*FANTAMORTO*\n\n Squadra: {nome_squadra}\n\n" + base_telegram_message
+                        else:
+                            team_message = f"*NOTIFICA GENERALE (ISCRITTO)*\n" + base_telegram_message
+                        
+                        c.execute("INSERT INTO notifiche_coda (tipo, indirizzo, corpo) VALUES ('telegram', ?, ?)", (chat_id, team_message))
 
+            # 5. Segna la persona come "processata" (messa in coda)
             c.execute("UPDATE persone SET notifica_inviata = 1 WHERE id_persona = ?", (person_id,))
+        
+        conn.commit()
+
+    except sqlite3.Error as e:
+        logging.error(f"Error while queueing notifications: {e}")
+        if conn:
+            conn.rollback()
+    finally:
+        if conn:
+            conn.close()
+
+
+def _process_queue_job(job):
+    """
+    Worker per il ThreadPool. Invia una singola notifica.
+    Restituisce l'ID del lavoro e se ha avuto successo.
+    """
+    (id_coda, tipo, indirizzo, oggetto, corpo) = job
+    
+    success = False
+    if tipo == 'email':
+        success = send_email_notification(indirizzo, oggetto, corpo)
+    elif tipo == 'telegram':
+        success = send_specific_telegram_notification(indirizzo, corpo)
+        
+    return id_coda, success
+
+
+def send_queued_notifications(DATABASE_FILE, MAX_WORKERS=5):
+    conn = None
+    try:
+        conn = sqlite3.connect(DATABASE_FILE)
+        c = conn.cursor()
+        
+        c.execute("SELECT id_coda, tipo, indirizzo, oggetto, corpo FROM notifiche_coda")
+        jobs = c.fetchall()
+        
+        if not jobs:
+            return
+        
+        successful_jobs_ids = []
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            future_to_job_id = {executor.submit(_process_queue_job, job): job[0] for job in jobs}
+            
+            for future in concurrent.futures.as_completed(future_to_job_id):
+                job_id, success = future.result()
+                
+                if success:
+                    successful_jobs_ids.append((job_id,))
+                else:
+                    logging.warning(f"Invio notifica (ID Coda: {job_id}) fallito. Rimane in coda.")
+
+        if successful_jobs_ids:
+            c.executemany("DELETE FROM notifiche_coda WHERE id_coda = ?", successful_jobs_ids)
             conn.commit()
 
     except sqlite3.Error as e:
-        logging.error(f"Error while processing notifications: {e}")
+        logging.error(f"Errore durante l'invio della coda di notifiche: {e}")
         if conn:
             conn.rollback()
     finally:

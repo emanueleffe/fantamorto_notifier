@@ -11,7 +11,8 @@ from data_manager import (
     get_team_data_from_files,
     associate_teams,
     remove_unassociated_people,
-    process_notifications
+    queue_new_death_notifications,
+    send_queued_notifications
 )
 from wikidata_api import find_wikidata_id, get_person_data
 from telegram_notification import send_telegram_notification
@@ -23,8 +24,9 @@ DATABASE_FILE = config['GENERALI']['DATABASE_FILE']
 LOG_FILE = config['GENERALI']['LOG_FILE']
 TEAMS_FOLDER = config['GENERALI']['TEAMS_FOLDER']
 
-# max number of threads for Wikidata API queries
 MAX_WORKERS_WIKIDATA = 5
+MAX_WORKERS_NOTIFICATIONS = 10 
+
 
 def setup_logging():
     log_dir = os.path.dirname(LOG_FILE)
@@ -39,22 +41,20 @@ def setup_logging():
         ]
     )
 
-# wrapper function to be used in threads
+
 def process_name(name):
     try:
         q_id = find_wikidata_id(DATABASE_FILE, name)
         if q_id == -1:
-            # API Error
             return (name, -1)
         if q_id:
-            # found
             return (name, q_id)
         else:
-            # not found
             return (name, None)
     except Exception as e:
         logging.error(f"Error in thread while searching for '{name}': {e}")
         return (name, -1)
+
 
 def main():
     setup_logging()
@@ -119,24 +119,24 @@ def main():
 
                 # --- test case ---
                 #if name == "Ornella Vanoni":
-                #    logging.warning("!!! test case ornella vanoni !!!")
-                #    data_to_save['data_di_morte'] = '2025-01-01'
+                #   logging.warning("!!! test case ornella vanoni !!!")
+                #   data_to_save['data_di_morte'] = '2025-01-01'
                 # ---end test case ---
                 
                 insert_or_update_person(DATABASE_FILE, name, data_to_save)
         
         
         associate_teams(DATABASE_FILE, team_associations)
-
         remove_unassociated_people(DATABASE_FILE, names_from_teams)
-        
-        process_notifications(DATABASE_FILE)
+        queue_new_death_notifications(DATABASE_FILE)
+        send_queued_notifications(DATABASE_FILE, MAX_WORKERS_NOTIFICATIONS)
         
         logging.info(f"End execution.\n\n")
     
     except Exception as e:
         logging.critical(f"Critical error {e}", exc_info=True)
         send_telegram_notification(f"Critical error: {e}")
+
 
 if __name__ == "__main__":
     main()

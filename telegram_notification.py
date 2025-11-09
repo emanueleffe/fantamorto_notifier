@@ -42,7 +42,7 @@ def _send_message(chat_id, message):
             return False
             
     except requests.exceptions.RequestException as e:
-        logging.error(f"Errore (requestexception) durante invio notifica: {e}")
+        logging.error(f"Error (requestexception) while sending notification: {e}")
         return False
 
 
@@ -52,10 +52,12 @@ def send_telegram_notification(message):
         return False
         
     full_message = "*FANTAMORTO*\n\n" + message
-    logging.info(f"Sending admin notification")
     return _send_message(GLOBAL_TG_CHAT_ID, full_message)
 
 
 def send_specific_telegram_notification(chat_id, message):
     logging.info(f"Sending specific notification: {str(chat_id)[:4]}...")
     return _send_message(chat_id, message)
+
+def get_global_chat_id():
+    return GLOBAL_TG_CHAT_ID

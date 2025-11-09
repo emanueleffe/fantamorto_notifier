@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS squadre (
     nome_squadra TEXT NOT NULL UNIQUE,
     nome_proprietario TEXT,
     email_notifica TEXT,
-    tg_chat_id_notifica TEXT
+    tg_chat_id_notifica TEXT,
+    notifica_tutti INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS persone_squadre (
@@ -29,4 +30,13 @@ CREATE TABLE IF NOT EXISTS persone_squadre (
     PRIMARY KEY (id_squadra, id_persona),
     FOREIGN KEY (id_squadra) REFERENCES squadre(id_squadra) ON DELETE CASCADE,
     FOREIGN KEY (id_persona) REFERENCES persone(id_persona) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS notifiche_coda (
+    id_coda INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    tipo TEXT NOT NULL, -- 'email' or 'telegram'
+    indirizzo TEXT NOT NULL, -- Email or Chat ID
+    oggetto TEXT, -- email only
+    corpo TEXT NOT NULL,
+    stato TEXT DEFAULT 'in_attesa' -- 'in_attesa' o 'fallito'
 );
