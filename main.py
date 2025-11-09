@@ -118,8 +118,8 @@ def main():
                     data_to_save['id_wikidata'] = q_id
 
                 # --- test case ---
-                #if name == "Ornella Vanoni":
-                #   logging.warning("!!! test case ornella vanoni !!!")
+                #if name == "6ix9ine":
+                #   logging.warning("!!! test case 6ix9ine !!!")
                 #   data_to_save['data_di_morte'] = '2025-01-01'
                 # ---end test case ---
                 
