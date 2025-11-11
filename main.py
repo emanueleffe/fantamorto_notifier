@@ -33,7 +33,7 @@ def setup_logging():
     if log_dir and not os.path.exists(log_dir):
         os.makedirs(log_dir)
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.WARNING,
         format='%(asctime)s - %(levelname)s - %(message)s',
         handlers=[
             logging.FileHandler(LOG_FILE, encoding='utf-8'),
