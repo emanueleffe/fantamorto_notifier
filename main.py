@@ -16,6 +16,7 @@ from data_manager import (
 )
 from wikidata_api import find_wikidata_id, get_person_data
 from telegram_notification import send_telegram_notification
+from teams_downloader_gsheet import teams_downloader
 
 config = configparser.ConfigParser()
 config.read('conf/general_config.ini')
@@ -61,6 +62,8 @@ def main():
 
     try:
         create_database_and_tables(DATABASE_FILE)
+
+        teams_downloader()
         
         names_from_teams, team_associations = get_team_data_from_files(TEAMS_FOLDER)
         
