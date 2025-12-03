@@ -5,8 +5,7 @@ CREATE TABLE IF NOT EXISTS persone (
     data_di_nascita TEXT,
     data_di_morte TEXT,
     link_wikidata TEXT,
-    id_wikidata TEXT UNIQUE,
-    notifica_inviata INTEGER DEFAULT 0
+    id_wikidata TEXT UNIQUE
 );
 
 CREATE TABLE IF NOT EXISTS id_cache (
@@ -27,8 +26,15 @@ CREATE TABLE IF NOT EXISTS squadre (
 CREATE TABLE IF NOT EXISTS persone_squadre (
     id_squadra INTEGER NOT NULL,
     id_persona INTEGER NOT NULL,
+    notifica_inviata INTEGER DEFAULT 0,
     PRIMARY KEY (id_squadra, id_persona),
     FOREIGN KEY (id_squadra) REFERENCES squadre(id_squadra) ON DELETE CASCADE,
+    FOREIGN KEY (id_persona) REFERENCES persone(id_persona) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS notifiche_globali (
+    id_persona INTEGER NOT NULL PRIMARY KEY,
+    inviata INTEGER DEFAULT 0,
     FOREIGN KEY (id_persona) REFERENCES persone(id_persona) ON DELETE CASCADE
 );
 

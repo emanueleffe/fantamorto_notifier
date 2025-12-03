@@ -1,6 +1,9 @@
 import os
 import re
-import pandas as pd
+import csv
+import requests
+import io
+import logging
 
 def teams_downloader():
     # --- CONFIGURAZIONE ---
@@ -8,92 +11,115 @@ def teams_downloader():
     GID = "0"
     GOOGLE_CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={GID}"
     NOTIFICHE_FILE = "notifiche.csv"
-    CORREZIONI_FILE = "correzioni.csv"  # Nuovo file config
+    CORREZIONI_FILE = "correzioni.csv"
     OUTPUT_DIR = "teams"
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     def sanitize_filename(name):
-        """Rimuove caratteri illegali per il filesystem."""
         return re.sub(r'[\\/*?:"<>|]', "", str(name)).strip()
 
     def clean_key(val):
-        """Normalizzazione stringhe: trim + lowercase per join robusto."""
-        return str(val).strip().lower() if pd.notna(val) else ""
+        return str(val).strip().lower() if val else ""
 
     # --- 1. CARICAMENTO DATI ---
     
-    # A. Caricamento Correzioni (Nuovo blocco)
+    # A. Caricamento Correzioni
     corrections_map = {}
     try:
-        df_corr = pd.read_csv(CORREZIONI_FILE)
-        # Mappa: key normalizzata -> Valore corretto originale
-        corrections_map = {
-            clean_key(row['Nome scaricato']): str(row['Nome corretto']).strip()
-            for _, row in df_corr.iterrows()
-            if pd.notna(row['Nome scaricato']) and pd.notna(row['Nome corretto'])
-        }
-    except FileNotFoundError:
-        print(f"Info: '{CORREZIONI_FILE}' non trovato. Nessuna correzione nomi verrà applicata.")
+        if os.path.exists(CORREZIONI_FILE):
+            with open(CORREZIONI_FILE, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    if row.get('Nome scaricato') and row.get('Nome corretto'):
+                        corrections_map[clean_key(row['Nome scaricato'])] = row['Nome corretto'].strip()
+        else:
+            logging.info(f"Info: '{CORREZIONI_FILE}' non trovato. Nessuna correzione nomi verrà applicata.")
     except Exception as e:
-        print(f"Errore caricamento correzioni: {e}")
+        logging.error(f"Errore caricamento correzioni: {e}")
 
     # B. Caricamento Notifiche
+    notifiche_data = []
     try:
-        df_notifiche = pd.read_csv(NOTIFICHE_FILE)
-        df_notifiche['join_persona'] = df_notifiche['Persona'].apply(clean_key)
-        df_notifiche['join_squadra'] = df_notifiche['squadra'].apply(clean_key)
-    except FileNotFoundError:
-        print(f"File '{NOTIFICHE_FILE}' non trovato. I file verranno generati senza dati di contatto.")
-        df_notifiche = pd.DataFrame(columns=['join_persona', 'join_squadra'])
+        if os.path.exists(NOTIFICHE_FILE):
+            with open(NOTIFICHE_FILE, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    notifiche_data.append({
+                        'join_persona': clean_key(row.get('Persona')),
+                        'join_squadra': clean_key(row.get('squadra')),
+                        'email': row.get('email'),
+                        'telegram_chat_id': row.get('telegram_chat_id')
+                    })
+        else:
+            logging.warning(f"File '{NOTIFICHE_FILE}' non trovato. I file verranno generati senza dati di contatto.")
+    except Exception as e:
+        logging.error(f"Errore caricamento notifiche: {e}")
 
     # C. Caricamento Sheet Teams
     try:
-        df_sheet = pd.read_csv(GOOGLE_CSV_URL, header=None)
+        response = requests.get(GOOGLE_CSV_URL)
+        response.raise_for_status()
+        
+        # Parse CSV from string
+        f = io.StringIO(response.text)
+        reader = csv.reader(f)
+        rows = list(reader)
+        
+        if not rows:
+            raise ValueError("Il foglio Google sembra vuoto.")
 
-        header_rows = df_sheet[df_sheet.apply(lambda row: row.astype(str).str.contains('Giocatore', case=False, na=False).any(), axis=1)]
-        if header_rows.empty:
+        # Find header row with "Giocatore"
+        header_row_idx = -1
+        for i, row in enumerate(rows):
+            if any("Giocatore" == str(cell).strip() for cell in row):
+                header_row_idx = i
+                break
+        
+        if header_row_idx == -1:
             raise ValueError("Header 'Giocatore' non trovato.")
-        header_row_idx = header_rows.index[0]
 
         count_files = 0
-
+        
         # --- 2. ELABORAZIONE ---
-        for col_idx in range(df_sheet.shape[1]):
-            cell_value = df_sheet.iloc[header_row_idx, col_idx]
+        num_cols = len(rows[header_row_idx])
+        
+        for col_idx in range(num_cols):
+            # Check bounds for current row
+            if col_idx >= len(rows[header_row_idx]):
+                continue
+                
+            cell_value = rows[header_row_idx][col_idx]
 
             if str(cell_value).strip() == "Giocatore":
                 # A. Metadati dal Sheet
-                metadata = df_sheet.iloc[:header_row_idx, col_idx].dropna()
-
+                # Metadata are in rows before header_row_idx
+                metadata = []
+                for r in range(header_row_idx):
+                    if col_idx < len(rows[r]) and rows[r][col_idx]:
+                        metadata.append(rows[r][col_idx])
+                
                 if len(metadata) >= 1:
-                    raw_team = metadata.iloc[0]
-                    raw_person = metadata.iloc[1] if len(metadata) > 1 else "Unknown"
+                    raw_team = metadata[0]
+                    raw_person = metadata[1] if len(metadata) > 1 else "Unknown"
                 else:
                     continue
 
-                # B. Join Rigorosa (Strict Match)
+                # B. Join Rigorosa
                 email_suffix = ""
                 telegram_suffix = ""
 
-                if not df_notifiche.empty:
+                if notifiche_data:
                     current_team_key = clean_key(raw_team)
                     current_person_key = clean_key(raw_person)
 
-                    match = df_notifiche[
-                        (df_notifiche['join_persona'] == current_person_key) &
-                        (df_notifiche['join_squadra'] == current_team_key)
-                    ]
-
-                    if not match.empty:
-                        row = match.iloc[0]
-                        if pd.notna(row['email']) and str(row['email']).strip():
-                            email_suffix = str(row['email']).strip()
-                        if pd.notna(row['telegram_chat_id']) and str(row['telegram_chat_id']).strip():
-                            try:
-                                telegram_suffix = str(int(float(row['telegram_chat_id'])))
-                            except ValueError:
-                                telegram_suffix = str(row['telegram_chat_id']).strip()
+                    for item in notifiche_data:
+                        if item['join_persona'] == current_person_key and item['join_squadra'] == current_team_key:
+                            if item['email'] and item['email'].strip():
+                                email_suffix = item['email'].strip()
+                            if item['telegram_chat_id'] and item['telegram_chat_id'].strip():
+                                telegram_suffix = item['telegram_chat_id'].strip()
+                            break
 
                 # C. Costruzione Filename
                 parts = [raw_team, raw_person]
@@ -105,23 +131,27 @@ def teams_downloader():
                 file_path = os.path.join(OUTPUT_DIR, filename)
 
                 # D. Estrazione e Pulizia Giocatori
-                players_series = df_sheet.iloc[header_row_idx + 1:, col_idx].dropna()
-                valid_players = [str(p).strip() for p in players_series if str(p).strip() and not str(p).isdigit()]
+                valid_players = []
+                for r in range(header_row_idx + 1, len(rows)):
+                    if col_idx < len(rows[r]):
+                        val = rows[r][col_idx]
+                        if val and str(val).strip() and not str(val).isdigit():
+                            valid_players.append(str(val).strip())
 
                 if valid_players:
-                    # E. Applicazione Correzioni (Nuovo step)
-                    # Se la chiave normalizzata è nel dizionario, sostituisci, altrimenti mantieni originale
+                    # E. Applicazione Correzioni
                     final_players = [
                         corrections_map.get(clean_key(p), p) 
                         for p in valid_players
                     ]
 
-                    with open(file_path, 'w', encoding='utf-8') as f:
-                        f.write('\n'.join(final_players))
+                    with open(file_path, 'w', encoding='utf-8') as f_out:
+                        f_out.write('\n'.join(final_players))
                     count_files += 1
 
     except Exception as e:
-        print(f"Errore: {e}")
+        logging.error(f"Errore: {e}")
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     teams_downloader()
