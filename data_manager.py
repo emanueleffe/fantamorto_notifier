@@ -373,29 +373,55 @@ def _process_queue_job(job: Tuple) -> Tuple[int, bool]:
 
 def send_queued_notifications(db_path: str, MAX_WORKERS: int = 5) -> None:
     db = Database(db_path)
+    MAX_RETRIES = 5
+    
     try:
         with db.get_cursor() as c:
-            c.execute("SELECT id_coda, tipo, indirizzo, oggetto, corpo FROM notifiche_coda")
+            c.execute("SELECT id_coda, tipo, indirizzo, oggetto, corpo, tentativi FROM notifiche_coda")
             jobs = c.fetchall()
             
             if not jobs:
                 return
             
-            successful_jobs_ids = []
+            jobs_to_delete = []
+            jobs_to_update_retry = []
+            history_entries = []
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                future_to_job_id = {executor.submit(_process_queue_job, job): job[0] for job in jobs}
+                # job is now (id, tipo, addr, subj, body, attempts)
+                future_to_job = {executor.submit(_process_queue_job, job[:5]): job for job in jobs}
                 
-                for future in concurrent.futures.as_completed(future_to_job_id):
-                    job_id, success = future.result()
+                for future in concurrent.futures.as_completed(future_to_job):
+                    original_job = future_to_job[future]
+                    job_id, tipo, indirizzo, oggetto, corpo, tentativi = original_job
+                    
+                    _, success = future.result()
                     
                     if success:
-                        successful_jobs_ids.append((job_id,))
+                        logging.info(f"Notification {job_id} sent successfully.")
+                        jobs_to_delete.append((job_id,))
+                        history_entries.append((tipo, indirizzo, oggetto, corpo, 'inviato'))
                     else:
-                        logging.warning(f"Invio notifica (ID Coda: {job_id}) fallito. Rimane in coda.")
+                        new_attempts = tentativi + 1
+                        if new_attempts >= MAX_RETRIES:
+                            logging.error(f"Notification {job_id} failed permanently after {new_attempts} attempts.")
+                            jobs_to_delete.append((job_id,))
+                            history_entries.append((tipo, indirizzo, oggetto, corpo, 'fallito'))
+                        else:
+                            logging.warning(f"Notification {job_id} failed. Retry {new_attempts}/{MAX_RETRIES}.")
+                            jobs_to_update_retry.append((new_attempts, job_id))
 
-            if successful_jobs_ids:
-                c.executemany("DELETE FROM notifiche_coda WHERE id_coda = ?", successful_jobs_ids)
+            if jobs_to_delete:
+                c.executemany("DELETE FROM notifiche_coda WHERE id_coda = ?", jobs_to_delete)
+            
+            if jobs_to_update_retry:
+                c.executemany("UPDATE notifiche_coda SET tentativi = ? WHERE id_coda = ?", jobs_to_update_retry)
+                
+            if history_entries:
+                c.executemany('''
+                    INSERT INTO notifiche_storico (tipo, indirizzo, oggetto, corpo, stato)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', history_entries)
 
     except Exception as e:
         logging.error(f"Errore durante l'invio della coda di notifiche: {e}")
