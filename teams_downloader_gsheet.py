@@ -5,14 +5,14 @@ import requests
 import io
 import logging
 
-def teams_downloader(sheet_id: str):
+def teams_downloader(sheet_id: str, output_dir: str = "teams"):
     # --- CONFIGURAZIONE ---
     SHEET_ID = sheet_id
     GID = "0"
     GOOGLE_CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={GID}"
     NOTIFICHE_FILE = "notifiche.csv"
     CORREZIONI_FILE = "correzioni.csv"
-    OUTPUT_DIR = "teams"
+    OUTPUT_DIR = output_dir
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
