@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS persone (
     data_di_nascita TEXT,
     data_di_morte TEXT,
     link_wikidata TEXT,
-    id_wikidata TEXT
+    id_wikidata TEXT UNIQUE
 );
 
 
@@ -43,7 +43,9 @@ CREATE TABLE IF NOT EXISTS notifiche_coda (
     id_squadra INTEGER,
     id_persona INTEGER,
     stato TEXT DEFAULT 'in_attesa', -- 'in_attesa' o 'fallito'
-    tentativi INTEGER DEFAULT 0
+    tentativi INTEGER DEFAULT 0,
+    FOREIGN KEY (id_squadra) REFERENCES squadre(id_squadra) ON DELETE CASCADE,
+    FOREIGN KEY (id_persona) REFERENCES persone(id_persona) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS notifiche_storico (
@@ -55,5 +57,7 @@ CREATE TABLE IF NOT EXISTS notifiche_storico (
     id_squadra INTEGER,
     id_persona INTEGER,
     data_invio TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    stato TEXT DEFAULT 'inviato'
+    stato TEXT DEFAULT 'inviato',
+    FOREIGN KEY (id_squadra) REFERENCES squadre(id_squadra) ON DELETE SET NULL,
+    FOREIGN KEY (id_persona) REFERENCES persone(id_persona) ON DELETE SET NULL
 );

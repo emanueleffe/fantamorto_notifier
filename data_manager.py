@@ -68,6 +68,19 @@ def save_id_to_cache(db_path: str, person_name: str, wikidata_id: str) -> None:
                 VALUES (?, ?)
                 ON CONFLICT(nome_originale) DO UPDATE SET id_wikidata=excluded.id_wikidata
             ''', (person_name, wikidata_id))
+    except sqlite3.IntegrityError as e:
+        if "UNIQUE constraint failed" in str(e) and "id_wikidata" in str(e):
+            try:
+                with db.get_cursor() as c:
+                    c.execute("SELECT nome_originale FROM persone WHERE id_wikidata = ?", (wikidata_id,))
+                    existing = c.fetchone()
+                    existing_name = existing[0] if existing else "Unknown"
+                    logging.warning(f"Duplicate Wikidata ID in cache for '{person_name}': {wikidata_id} is already used by '{existing_name}'.")
+            except Exception as lookup_error:
+                logging.error(f"Error while looking up duplicate ID: {lookup_error}")
+        else:
+             logging.error(f"Integrity Error while writing id to database: {e}")
+
     except Exception as e:
         logging.error(f"Error while writing id to database (persone table): {e}")
 
@@ -159,7 +172,7 @@ def get_already_processed_info(db_path: str) -> Tuple[Set[str], Set[str]]:
         return set(), set()
 
 
-def associate_teams(db_path: str, team_associations: Dict[str, Dict[str, Any]]) -> None:
+def associate_teams(db_path: str, team_associations: Dict[str, Dict[str, Any]], names_to_qid_map: Dict[str, str] = None) -> None:
     db = Database(db_path)
     try:
         with db.get_cursor() as c:
@@ -215,6 +228,23 @@ def associate_teams(db_path: str, team_associations: Dict[str, Dict[str, Any]]) 
                     person_id = person_id_map.get(person_name)
                     if person_id: 
                         desired_association_ids.add((team_id, person_id))
+                    else:
+                        # Fallback: check if we know the Wikidata ID for this name (which implies it might be a duplicate name for an existing ID)
+                        if names_to_qid_map and person_name in names_to_qid_map:
+                            qid = names_to_qid_map[person_name]
+                            # Find the person ID that holds this QID
+                            # Note: This query is inside a loop, suboptimal but effective for small scale.
+                            # Optimization: We could pre-fetch QID->PersonID map.
+                            c.execute("SELECT id_persona FROM persone WHERE id_wikidata = ?", (qid,))
+                            row = c.fetchone()
+                            if row:
+                                existing_person_id = row[0]
+                                desired_association_ids.add((team_id, existing_person_id))
+                                logging.info(f"Team Association: Linked '{person_name}' (via QID {qid}) to existing ID {existing_person_id}")
+                            else:
+                                logging.warning(f"Warning: '{person_name}' has QID {qid} but no corresponding person found in DB.")
+                        else:
+                             logging.warning(f"Warning: Person '{person_name}' not found in DB and no QID mapping available.")
 
             current_association_ids = set(c.execute("SELECT id_squadra, id_persona FROM persone_squadre"))
 
@@ -243,7 +273,7 @@ def insert_or_update_person(db_path: str, original_name: str, data: Dict[str, An
                 'data_di_nascita': data.get('data_di_nascita'),
                 'data_di_morte': data.get('data_di_morte'),
                 'wikidata_url': data.get('wikidata_url', 'Non trovato'),
-                'id_wikidata': data.get('id_wikidata', 'Non trovato')
+                'id_wikidata': data.get('id_wikidata', None)
             }
 
             if not existing_row:
@@ -261,6 +291,20 @@ def insert_or_update_person(db_path: str, original_name: str, data: Dict[str, An
                 ''', (new_data['nome'], new_data['data_di_nascita'], new_data['data_di_morte'],
                       new_data['wikidata_url'], new_data['id_wikidata'], 
                       original_name))
+
+    except sqlite3.IntegrityError as e:
+        if "UNIQUE constraint failed" in str(e) and "id_wikidata" in str(e):
+             # Try to find who has this ID
+            try:
+                with db.get_cursor() as c:
+                    c.execute("SELECT nome_originale FROM persone WHERE id_wikidata = ?", (new_data['id_wikidata'],))
+                    existing = c.fetchone()
+                    existing_name = existing[0] if existing else "Unknown"
+                    logging.warning(f"Duplicate Wikidata ID for '{original_name}': {new_data['id_wikidata']} is already used by '{existing_name}'. This entry will be skipped.")
+            except Exception as lookup_error:
+                logging.error(f"Error while looking up duplicate ID: {lookup_error}")
+        else:
+            logging.error(f"Integrity Error while inserting data for {original_name}: {e}")
 
     except Exception as e:
         logging.error(f"Error while inserting data: {e}")
@@ -425,24 +469,3 @@ def send_queued_notifications(db_path: str, MAX_WORKERS: int = 5) -> None:
     except Exception as e:
         logging.error(f"Errore durante l'invio della coda di notifiche: {e}")
 
-
-def remove_unassociated_people(db_path: str, people_in_csv_files_set: Set[str]) -> None:
-    db = Database(db_path)
-    try:
-        with db.get_cursor() as c:
-            c.execute("SELECT nome_originale, id_persona, id_wikidata FROM persone")
-            all_people_in_db = c.fetchall()
-
-            people_to_remove = []
-            for original_name, person_id, wikidata_id in all_people_in_db:
-                if original_name not in people_in_csv_files_set:
-                    people_to_remove.append((person_id, original_name, wikidata_id))
-
-            if not people_to_remove:
-                return
-
-            for person_id, original_name, wikidata_id in people_to_remove:            
-                c.execute("DELETE FROM persone WHERE id_persona = ?", (person_id,))
-
-    except Exception as e:
-        logging.error(f"Error while removing people from db: {e}")

@@ -11,7 +11,6 @@ from data_manager import (
     insert_or_update_person,
     get_team_data_from_files,
     associate_teams,
-    remove_unassociated_people,
     queue_new_death_notifications,
     send_queued_notifications
 )
@@ -111,7 +110,7 @@ def main() -> None:
                             'data_di_nascita': None,
                             'data_di_morte': None,
                             'wikidata_url': 'Not found',
-                            'id_wikidata': 'Not found'
+                            'id_wikidata': None
                         }
                         insert_or_update_person(DATABASE_FILE, name, data_to_save)
                         send_telegram_notification(f"Wikidata ID not found for: {name}")
@@ -131,10 +130,10 @@ def main() -> None:
                     insert_or_update_person(DATABASE_FILE, name, data_to_save)
         
         logging.info("Associating teams...")
-        associate_teams(DATABASE_FILE, team_associations)
+        associate_teams(DATABASE_FILE, team_associations, original_names_map)
         
-        logging.info("Cleaning up unassociated people...")
-        remove_unassociated_people(DATABASE_FILE, names_from_teams)
+        # logging.info("Cleaning up unassociated people...")
+        # remove_unassociated_people(DATABASE_FILE, names_from_teams)
         
         logging.info("Queueing notifications...")
         queue_new_death_notifications(DATABASE_FILE)
