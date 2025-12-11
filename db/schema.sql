@@ -8,11 +8,7 @@ CREATE TABLE IF NOT EXISTS persone (
     id_wikidata TEXT UNIQUE
 );
 
-CREATE TABLE IF NOT EXISTS id_cache (
-    id_cache INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    id_wikidata TEXT UNIQUE,
-    nome_originale TEXT UNIQUE
-);
+
 
 CREATE TABLE IF NOT EXISTS squadre (
     id_squadra INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,

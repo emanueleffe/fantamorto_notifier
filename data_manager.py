@@ -50,11 +50,11 @@ def get_id_from_cache(db_path: str, person_name: str) -> Optional[str]:
     db = Database(db_path)
     try:
         with db.get_cursor() as c:
-            c.execute("SELECT id_wikidata FROM id_cache WHERE nome_originale = ?", (person_name,))
+            c.execute("SELECT id_wikidata FROM persone WHERE nome_originale = ?", (person_name,))
             result = c.fetchone()
             return result[0] if result else None
     except Exception as e:
-        logging.error(f"Error while reading id from cache table: {e}")
+        logging.error(f"Error while reading id from database (persone table): {e}")
         return None
 
 
@@ -62,12 +62,14 @@ def save_id_to_cache(db_path: str, person_name: str, wikidata_id: str) -> None:
     db = Database(db_path)
     try:
         with db.get_cursor() as c:
+            # Upsert into persone table
             c.execute('''
-                INSERT OR REPLACE INTO id_cache (nome_originale, id_wikidata)
+                INSERT INTO persone (nome_originale, id_wikidata)
                 VALUES (?, ?)
+                ON CONFLICT(nome_originale) DO UPDATE SET id_wikidata=excluded.id_wikidata
             ''', (person_name, wikidata_id))
     except Exception as e:
-        logging.error(f"Error while writing id to cache table: {e}")
+        logging.error(f"Error while writing id to database (persone table): {e}")
 
 
 def get_team_data_from_files(folder: str) -> Tuple[Set[str], Dict[str, Dict[str, Any]]]:
@@ -440,9 +442,10 @@ def remove_unassociated_people(db_path: str, people_in_csv_files_set: Set[str]) 
                 return
 
             for person_id, original_name, wikidata_id in people_to_remove:            
-                if wikidata_id and wikidata_id != 'Non trovato':
-                    c.execute("DELETE FROM id_cache WHERE id_wikidata = ?", (wikidata_id,))
-                c.execute("DELETE FROM id_cache WHERE nome_originale = ?", (original_name,))
+                # We no longer have id_cache to clean up
+                # if wikidata_id and wikidata_id != 'Non trovato':
+                #    c.execute("DELETE FROM id_cache WHERE id_wikidata = ?", (wikidata_id,))
+                # c.execute("DELETE FROM id_cache WHERE nome_originale = ?", (original_name,))
                 
                 c.execute("DELETE FROM persone WHERE id_persona = ?", (person_id,))
 
