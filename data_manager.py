@@ -429,6 +429,10 @@ def send_queued_notifications(db_path: str, MAX_WORKERS: int = 5) -> None:
                 c.execute("SELECT id_coda, tipo, indirizzo, oggetto, corpo, id_squadra, id_persona, tentativi FROM notifiche_coda")
                 jobs = c.fetchall()
 
+                jobs_to_delete = []
+                jobs_to_update_retry = []
+                history_entries = []
+
                 if not jobs:
                     return
 

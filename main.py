@@ -67,7 +67,7 @@ def main() -> None:
         create_database_and_tables(DATABASE_FILE)
 
         logging.info("Downloading teams...")
-        teams_downloader(GOOGLE_SHEET_ID)
+        teams_downloader(GOOGLE_SHEET_ID, TEAMS_FOLDER)
         
         logging.info("Reading team files...")
         names_from_teams, team_associations = get_team_data_from_files(TEAMS_FOLDER)
