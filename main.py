@@ -18,7 +18,7 @@ from wikidata_api import find_wikidata_id, get_person_data
 from telegram_notification import send_telegram_notification
 from teams_downloader_gsheet import teams_downloader
 
-# Load Config
+
 config = configparser.ConfigParser()
 config.read('conf/general_config.ini')
 
@@ -49,7 +49,7 @@ def process_name(name: str) -> Tuple[str, Optional[str]]:
     try:
         q_id = find_wikidata_id(DATABASE_FILE, name)
         if q_id == -1:
-            return (name, "-1") # Return string "-1" to match type hint if needed, or keep mixed types but be careful
+            return (name, "-1")
         if q_id:
             return (name, q_id)
         else:
@@ -61,15 +61,15 @@ def process_name(name: str) -> Tuple[str, Optional[str]]:
 
 def main() -> None:
     setup_logging()
-    logging.info("Starting FantaMorto Notifier...")
+    logging.info("Starting FantaMorto notifier")
 
     try:
         create_database_and_tables(DATABASE_FILE)
 
-        logging.info("Downloading teams...")
+        logging.info("Downloading teams")
         teams_downloader(GOOGLE_SHEET_ID, TEAMS_FOLDER)
         
-        logging.info("Reading team files...")
+        logging.info("Reading team files")
         names_from_teams, team_associations = get_team_data_from_files(TEAMS_FOLDER)
         
         if not names_from_teams:
@@ -118,7 +118,7 @@ def main() -> None:
             q_ids_to_query = list(set(original_names_map.values()))
             
             if q_ids_to_query:
-                logging.info(f"Querying Wikidata for {len(q_ids_to_query)} IDs...")
+                logging.info(f"Querying Wikidata for {len(q_ids_to_query)} IDs")
                 all_updated_data = get_person_data(q_ids_to_query) 
 
                 for name, q_id in original_names_map.items():
@@ -129,19 +129,16 @@ def main() -> None:
 
                     insert_or_update_person(DATABASE_FILE, name, data_to_save)
         
-        logging.info("Associating teams...")
+        logging.info("Associating teams")
         associate_teams(DATABASE_FILE, team_associations, original_names_map)
         
-        # logging.info("Cleaning up unassociated people...")
-        # remove_unassociated_people(DATABASE_FILE, names_from_teams)
-        
-        logging.info("Queueing notifications...")
+        logging.info("Queueing notifications if needed")
         queue_new_death_notifications(DATABASE_FILE)
         
-        logging.info("Sending notifications...")
+        logging.info("Sending notifications if needed")
         send_queued_notifications(DATABASE_FILE, MAX_WORKERS_NOTIFICATIONS)
         
-        logging.info(f"End execution.\n\n")
+        logging.info(f"End execution\n\n")
     
     except Exception as e:
         logging.critical(f"Critical error {e}", exc_info=True)

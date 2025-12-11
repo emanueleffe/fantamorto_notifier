@@ -233,8 +233,6 @@ def associate_teams(db_path: str, team_associations: Dict[str, Dict[str, Any]], 
                         if names_to_qid_map and person_name in names_to_qid_map:
                             qid = names_to_qid_map[person_name]
                             # Find the person ID that holds this QID
-                            # Note: This query is inside a loop, suboptimal but effective for small scale.
-                            # Optimization: We could pre-fetch QID->PersonID map.
                             c.execute("SELECT id_persona FROM persone WHERE id_wikidata = ?", (qid,))
                             row = c.fetchone()
                             if row:
@@ -471,5 +469,5 @@ def send_queued_notifications(db_path: str, MAX_WORKERS: int = 5) -> None:
                 ''', history_entries)
 
     except Exception as e:
-        logging.error(f"Errore durante l'invio della coda di notifiche: {e}")
+        logging.error(f"Error sending notification queue: {e}")
 

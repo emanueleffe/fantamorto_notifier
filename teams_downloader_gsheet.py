@@ -21,10 +21,8 @@ def teams_downloader(sheet_id: str, output_dir: str = "teams"):
 
     def clean_key(val):
         return str(val).strip().lower() if val else ""
-
-    # --- 1. CARICAMENTO DATI ---
     
-    # A. Caricamento Correzioni
+    # caricamento correzioni
     corrections_map = {}
     try:
         if os.path.exists(CORREZIONI_FILE):
@@ -34,11 +32,11 @@ def teams_downloader(sheet_id: str, output_dir: str = "teams"):
                     if row.get('Nome scaricato') and row.get('Nome corretto'):
                         corrections_map[clean_key(row['Nome scaricato'])] = row['Nome corretto'].strip()
         else:
-            logging.info(f"Info: '{CORREZIONI_FILE}' non trovato. Nessuna correzione nomi verrà applicata.")
+            logging.info(f"Info: '{CORREZIONI_FILE}' not found. No name corrections will be applied.")
     except Exception as e:
-        logging.error(f"Errore caricamento correzioni: {e}")
+        logging.error(f"Error loading corrections: {e}")
 
-    # B. Caricamento Notifiche
+    # caricamento notifiche
     notifiche_data = []
     try:
         if os.path.exists(NOTIFICHE_FILE):
@@ -52,24 +50,24 @@ def teams_downloader(sheet_id: str, output_dir: str = "teams"):
                         'telegram_chat_id': row.get('telegram_chat_id')
                     })
         else:
-            logging.warning(f"File '{NOTIFICHE_FILE}' non trovato. I file verranno generati senza dati di contatto.")
+            logging.warning(f"File '{NOTIFICHE_FILE}' not found. Files will be generated without contact data.")
     except Exception as e:
-        logging.error(f"Errore caricamento notifiche: {e}")
+        logging.error(f"Error loading notifications: {e}")
 
-    # C. Caricamento Sheet Teams
+    # caricamento sheet teams
     try:
         response = requests.get(GOOGLE_CSV_URL)
         response.raise_for_status()
         
-        # Parse CSV from string
+        # parse csv from string
         f = io.StringIO(response.text)
         reader = csv.reader(f)
         rows = list(reader)
         
         if not rows:
-            raise ValueError("Il foglio Google sembra vuoto.")
+            raise ValueError("sheet is empty")
 
-        # Find header row with "Giocatore"
+        # find header row with "Giocatore"
         header_row_idx = -1
         for i, row in enumerate(rows):
             if any("Giocatore" == str(cell).strip() for cell in row):
@@ -77,23 +75,21 @@ def teams_downloader(sheet_id: str, output_dir: str = "teams"):
                 break
         
         if header_row_idx == -1:
-            raise ValueError("Header 'Giocatore' non trovato.")
-
+            raise ValueError("Header 'Giocatore' not found.")
+        
         count_files = 0
         
-        # --- 2. ELABORAZIONE ---
         num_cols = len(rows[header_row_idx])
         
         for col_idx in range(num_cols):
-            # Check bounds for current row
+            # check bounds for current row
             if col_idx >= len(rows[header_row_idx]):
                 continue
                 
             cell_value = rows[header_row_idx][col_idx]
 
             if str(cell_value).strip() == "Giocatore":
-                # A. Metadati dal Sheet
-                # Metadata are in rows before header_row_idx
+                # metadata are in rows before header_row_idx
                 metadata = []
                 for r in range(header_row_idx):
                     if col_idx < len(rows[r]) and rows[r][col_idx]:
@@ -105,7 +101,6 @@ def teams_downloader(sheet_id: str, output_dir: str = "teams"):
                 else:
                     continue
 
-                # B. Join Rigorosa
                 email_suffix = ""
                 telegram_suffix = ""
 
@@ -121,7 +116,7 @@ def teams_downloader(sheet_id: str, output_dir: str = "teams"):
                                 telegram_suffix = item['telegram_chat_id'].strip()
                             break
 
-                # C. Costruzione Filename
+                # costruzione filename
                 parts = [raw_team, raw_person]
                 if email_suffix: parts.append(email_suffix)
                 if telegram_suffix: parts.append(telegram_suffix)
@@ -130,7 +125,7 @@ def teams_downloader(sheet_id: str, output_dir: str = "teams"):
                 filename = f"{sanitize_filename(full_name)}.csv"
                 file_path = os.path.join(OUTPUT_DIR, filename)
 
-                # D. Estrazione e Pulizia Giocatori
+                # estrazione e pulizia giocatori
                 valid_players = []
                 for r in range(header_row_idx + 1, len(rows)):
                     if col_idx < len(rows[r]):
@@ -139,7 +134,7 @@ def teams_downloader(sheet_id: str, output_dir: str = "teams"):
                             valid_players.append(str(val).strip())
 
                 if valid_players:
-                    # E. Applicazione Correzioni
+                    # applicazione correzioni
                     final_players = [
                         corrections_map.get(clean_key(p), p) 
                         for p in valid_players
