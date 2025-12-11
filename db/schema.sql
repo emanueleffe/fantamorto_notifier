@@ -44,6 +44,8 @@ CREATE TABLE IF NOT EXISTS notifiche_coda (
     indirizzo TEXT NOT NULL, -- Email or Chat ID
     oggetto TEXT, -- email only
     corpo TEXT NOT NULL,
+    id_squadra INTEGER,
+    id_persona INTEGER,
     stato TEXT DEFAULT 'in_attesa', -- 'in_attesa' o 'fallito'
     tentativi INTEGER DEFAULT 0
 );
@@ -54,6 +56,8 @@ CREATE TABLE IF NOT EXISTS notifiche_storico (
     indirizzo TEXT NOT NULL,
     oggetto TEXT,
     corpo TEXT NOT NULL,
+    id_squadra INTEGER,
+    id_persona INTEGER,
     data_invio TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     stato TEXT DEFAULT 'inviato'
 );

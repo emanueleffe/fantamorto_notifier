@@ -280,7 +280,7 @@ def queue_new_death_notifications(db_path: str) -> None:
             global_to_notify = c.fetchall()
             
             if global_to_notify:
-                c.execute("SELECT nome_squadra, email_notifica, tg_chat_id_notifica FROM squadre WHERE notifica_tutti = 1")
+                c.execute("SELECT id_squadra, nome_squadra, email_notifica, tg_chat_id_notifica FROM squadre WHERE notifica_tutti = 1")
                 general_subscribers = c.fetchall()
                 
                 for (person_id, original_name, birth_date, death_date, wikidata_url) in global_to_notify:
@@ -303,15 +303,15 @@ def queue_new_death_notifications(db_path: str) -> None:
                     
                     if GLOBAL_ADMIN_CHAT_ID:
                         admin_msg = "*FANTAMORTO (ADMIN)*\n\n" + base_msg
-                        c.execute("INSERT INTO notifiche_coda (tipo, indirizzo, corpo) VALUES ('telegram', ?, ?)", (GLOBAL_ADMIN_CHAT_ID, admin_msg))
+                        c.execute("INSERT INTO notifiche_coda (tipo, indirizzo, corpo, id_persona) VALUES ('telegram', ?, ?, ?)", (GLOBAL_ADMIN_CHAT_ID, admin_msg, person_id))
                     
-                    for (nome_squadra, email, chat_id) in general_subscribers:
+                    for (id_squadra, nome_squadra, email, chat_id) in general_subscribers:
                         sub_msg = f"*NOTIFICA GENERALE*\n" + base_msg
                         if email:
                             subject = f"†FantaMorto† Notifica Generale: {original_name}"
-                            c.execute("INSERT INTO notifiche_coda (tipo, indirizzo, oggetto, corpo) VALUES ('email', ?, ?, ?)", (email, subject, sub_msg))
+                            c.execute("INSERT INTO notifiche_coda (tipo, indirizzo, oggetto, corpo, id_squadra, id_persona) VALUES ('email', ?, ?, ?, ?, ?)", (email, subject, sub_msg, id_squadra, person_id))
                         if chat_id:
-                            c.execute("INSERT INTO notifiche_coda (tipo, indirizzo, corpo) VALUES ('telegram', ?, ?)", (chat_id, sub_msg))
+                            c.execute("INSERT INTO notifiche_coda (tipo, indirizzo, corpo, id_squadra, id_persona) VALUES ('telegram', ?, ?, ?, ?)", (chat_id, sub_msg, id_squadra, person_id))
                     
                     c.execute("INSERT OR REPLACE INTO notifiche_globali (id_persona, inviata) VALUES (?, 1)", (person_id,))
             
@@ -348,10 +348,10 @@ def queue_new_death_notifications(db_path: str) -> None:
                 email_subject = f"†FantaMorto† Notifica: Decesso - {original_name}"
 
                 if email:
-                    c.execute("INSERT INTO notifiche_coda (tipo, indirizzo, oggetto, corpo) VALUES ('email', ?, ?, ?)", (email, email_subject, team_msg))
+                    c.execute("INSERT INTO notifiche_coda (tipo, indirizzo, oggetto, corpo, id_squadra, id_persona) VALUES ('email', ?, ?, ?, ?, ?)", (email, email_subject, team_msg, team_id, person_id))
                 
                 if chat_id:
-                    c.execute("INSERT INTO notifiche_coda (tipo, indirizzo, corpo) VALUES ('telegram', ?, ?)", (chat_id, team_msg))
+                    c.execute("INSERT INTO notifiche_coda (tipo, indirizzo, corpo, id_squadra, id_persona) VALUES ('telegram', ?, ?, ?, ?)", (chat_id, team_msg, team_id, person_id))
                 
                 c.execute("UPDATE persone_squadre SET notifica_inviata = 1 WHERE id_squadra = ? AND id_persona = ?", (team_id, person_id))
 
@@ -377,36 +377,33 @@ def send_queued_notifications(db_path: str, MAX_WORKERS: int = 5) -> None:
     
     try:
         with db.get_cursor() as c:
-            c.execute("SELECT id_coda, tipo, indirizzo, oggetto, corpo, tentativi FROM notifiche_coda")
-            jobs = c.fetchall()
-            
-            if not jobs:
-                return
-            
-            jobs_to_delete = []
-            jobs_to_update_retry = []
-            history_entries = []
-
             with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                # job is now (id, tipo, addr, subj, body, attempts)
+                # job is now (id, tipo, addr, subj, body, id_squadra, id_persona, attempts)
+                # fetch all columns, pass first 5 to processor
+                c.execute("SELECT id_coda, tipo, indirizzo, oggetto, corpo, id_squadra, id_persona, tentativi FROM notifiche_coda")
+                jobs = c.fetchall()
+
+                if not jobs:
+                    return
+
                 future_to_job = {executor.submit(_process_queue_job, job[:5]): job for job in jobs}
                 
                 for future in concurrent.futures.as_completed(future_to_job):
                     original_job = future_to_job[future]
-                    job_id, tipo, indirizzo, oggetto, corpo, tentativi = original_job
+                    job_id, tipo, indirizzo, oggetto, corpo, id_squadra, id_persona, tentativi = original_job
                     
                     _, success = future.result()
                     
                     if success:
                         logging.info(f"Notification {job_id} sent successfully.")
                         jobs_to_delete.append((job_id,))
-                        history_entries.append((tipo, indirizzo, oggetto, corpo, 'inviato'))
+                        history_entries.append((tipo, indirizzo, oggetto, corpo, 'inviato', id_squadra, id_persona))
                     else:
                         new_attempts = tentativi + 1
                         if new_attempts >= MAX_RETRIES:
                             logging.error(f"Notification {job_id} failed permanently after {new_attempts} attempts.")
                             jobs_to_delete.append((job_id,))
-                            history_entries.append((tipo, indirizzo, oggetto, corpo, 'fallito'))
+                            history_entries.append((tipo, indirizzo, oggetto, corpo, 'fallito', id_squadra, id_persona))
                         else:
                             logging.warning(f"Notification {job_id} failed. Retry {new_attempts}/{MAX_RETRIES}.")
                             jobs_to_update_retry.append((new_attempts, job_id))
@@ -419,8 +416,8 @@ def send_queued_notifications(db_path: str, MAX_WORKERS: int = 5) -> None:
                 
             if history_entries:
                 c.executemany('''
-                    INSERT INTO notifiche_storico (tipo, indirizzo, oggetto, corpo, stato)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO notifiche_storico (tipo, indirizzo, oggetto, corpo, stato, id_squadra, id_persona)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                 ''', history_entries)
 
     except Exception as e:

@@ -26,6 +26,7 @@ config.read('conf/general_config.ini')
 DATABASE_FILE = config['GENERALI']['DATABASE_FILE']
 LOG_FILE = config['GENERALI']['LOG_FILE']
 TEAMS_FOLDER = config['GENERALI']['TEAMS_FOLDER']
+GOOGLE_SHEET_ID = config['GENERALI']['GOOGLE_SHEET_ID']
 
 MAX_WORKERS_WIKIDATA = 5
 MAX_WORKERS_NOTIFICATIONS = 10 
@@ -67,7 +68,7 @@ def main() -> None:
         create_database_and_tables(DATABASE_FILE)
 
         logging.info("Downloading teams...")
-        teams_downloader()
+        teams_downloader(GOOGLE_SHEET_ID)
         
         logging.info("Reading team files...")
         names_from_teams, team_associations = get_team_data_from_files(TEAMS_FOLDER)
