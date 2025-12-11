@@ -100,9 +100,6 @@ def main() -> None:
                         msg = f'Critical error during search for {name} (q_id = -1). Stopping.'
                         logging.error(msg)
                         send_telegram_notification(msg)
-                        # We don't raise Exception here to avoid stopping the whole process for one error, 
-                        # but the original logic did. Let's keep it robust but maybe not crash everything?
-                        # For now, adhering to original logic of "Stopping" implies crash.
                         raise Exception(msg)
                     
                     elif q_id:

@@ -272,7 +272,7 @@ def queue_new_death_notifications(db_path: str) -> None:
     
     try:
         with db.get_cursor() as c:
-            # 1. Global Notifications
+            # Global Notifications
             c.execute('''
                 SELECT P.id_persona, P.nome_originale, P.data_di_nascita, P.data_di_morte, P.link_wikidata 
                 FROM persone P
@@ -317,7 +317,7 @@ def queue_new_death_notifications(db_path: str) -> None:
                     
                     c.execute("INSERT OR REPLACE INTO notifiche_globali (id_persona, inviata) VALUES (?, 1)", (person_id,))
             
-            # 2. Team Specific Notifications
+            # Team Specific Notifications
             c.execute('''
                 SELECT P.id_persona, P.nome_originale, P.data_di_nascita, P.data_di_morte, P.link_wikidata,
                        S.id_squadra, S.nome_squadra, S.email_notifica, S.tg_chat_id_notifica
@@ -442,11 +442,6 @@ def remove_unassociated_people(db_path: str, people_in_csv_files_set: Set[str]) 
                 return
 
             for person_id, original_name, wikidata_id in people_to_remove:            
-                # We no longer have id_cache to clean up
-                # if wikidata_id and wikidata_id != 'Non trovato':
-                #    c.execute("DELETE FROM id_cache WHERE id_wikidata = ?", (wikidata_id,))
-                # c.execute("DELETE FROM id_cache WHERE nome_originale = ?", (original_name,))
-                
                 c.execute("DELETE FROM persone WHERE id_persona = ?", (person_id,))
 
     except Exception as e:

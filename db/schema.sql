@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS persone (
     data_di_nascita TEXT,
     data_di_morte TEXT,
     link_wikidata TEXT,
-    id_wikidata TEXT UNIQUE
+    id_wikidata TEXT
 );
 
 
