@@ -60,7 +60,7 @@ def teams_downloader(sheet_id: str, output_dir: str = "teams"):
         response.raise_for_status()
         
         # parse csv from string
-        f = io.StringIO(response.text)
+        f = io.StringIO(response.content.decode('utf-8'))
         reader = csv.reader(f)
         rows = list(reader)
         
