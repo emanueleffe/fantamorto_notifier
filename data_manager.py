@@ -60,6 +60,21 @@ def get_id_from_cache(db_path: str, person_name: str) -> Optional[str]:
 
 def save_id_to_cache(db_path: str, person_name: str, wikidata_id: str) -> None:
     db = Database(db_path)
+    # Pre-check to avoid "Database error" logging from database.py
+    try:
+        with db.get_cursor() as c:
+             c.execute("SELECT id_persona, nome_originale FROM persone WHERE id_wikidata = ?", (wikidata_id,))
+             row = c.fetchone()
+             if row:
+                existing_id, existing_name = row
+                if existing_name != person_name:
+                    logging.warning(f"Duplicate Wikidata ID for '{person_name}': {wikidata_id} is used by '{existing_name}'. Merging '{existing_name}' -> '{person_name}'.")
+                    c.execute("UPDATE persone SET nome_originale = ? WHERE id_persona = ?", (person_name, existing_id))
+                    logging.warning(f"Merge successful: ID {existing_id} renamed from '{existing_name}' to '{person_name}'")
+                return # Already exists/handled
+    except Exception as e:
+        logging.error(f"Error checking duplicate ID cache: {e}")
+
     try:
         with db.get_cursor() as c:
             # Upsert into persone table
@@ -69,15 +84,9 @@ def save_id_to_cache(db_path: str, person_name: str, wikidata_id: str) -> None:
                 ON CONFLICT(nome_originale) DO UPDATE SET id_wikidata=excluded.id_wikidata
             ''', (person_name, wikidata_id))
     except sqlite3.IntegrityError as e:
+        # Keeping fallback just in case of race condition
         if "UNIQUE constraint failed" in str(e) and "id_wikidata" in str(e):
-            try:
-                with db.get_cursor() as c:
-                    c.execute("SELECT nome_originale FROM persone WHERE id_wikidata = ?", (wikidata_id,))
-                    existing = c.fetchone()
-                    existing_name = existing[0] if existing else "Unknown"
-                    logging.warning(f"Duplicate Wikidata ID in cache for '{person_name}': {wikidata_id} is already used by '{existing_name}'.")
-            except Exception as lookup_error:
-                logging.error(f"Error while looking up duplicate ID: {lookup_error}")
+             logging.warning(f"Race condition caught: Duplicate ID {wikidata_id} for {person_name}")
         else:
              logging.error(f"Integrity Error while writing id to database: {e}")
 
@@ -274,6 +283,26 @@ def insert_or_update_person(db_path: str, original_name: str, data: Dict[str, An
                 'id_wikidata': data.get('id_wikidata', None)
             }
 
+            # Pre-check for ID collision to avoid IntegrityError logs
+            if new_data['id_wikidata']:
+                 c.execute("SELECT id_persona, nome_originale FROM persone WHERE id_wikidata = ?", (new_data['id_wikidata'],))
+                 row_check = c.fetchone()
+                 if row_check and (not existing_row or row_check[0] != existing_row[0]):
+                     # Collision detected with a DIFFERENT person (or we are inserting new)
+                     existing_id, existing_name = row_check
+                     logging.warning(f"Duplicate Wikidata ID for '{original_name}': {new_data['id_wikidata']} is used by '{existing_name}'. Merging '{existing_name}' -> '{original_name}'.")
+                     
+                     c.execute('''
+                        UPDATE persone
+                        SET nome_originale = ?, nome_wikidata = ?, data_di_nascita = ?, data_di_morte = ?, 
+                            link_wikidata = ?, id_wikidata = ?
+                        WHERE id_persona = ?
+                     ''', (original_name, new_data['nome'], new_data['data_di_nascita'], new_data['data_di_morte'],
+                           new_data['wikidata_url'], new_data['id_wikidata'], 
+                           existing_id))
+                     logging.warning(f"Merge successful: ID {existing_id} fully updated to '{original_name}'")
+                     return # Merge done, skip standard insert/update
+
             if not existing_row:
                 c.execute('''
                     INSERT OR IGNORE INTO persone (nome_originale, nome_wikidata, data_di_nascita, data_di_morte, link_wikidata, id_wikidata)
@@ -292,15 +321,7 @@ def insert_or_update_person(db_path: str, original_name: str, data: Dict[str, An
 
     except sqlite3.IntegrityError as e:
         if "UNIQUE constraint failed" in str(e) and "id_wikidata" in str(e):
-             # Try to find who has this ID
-            try:
-                with db.get_cursor() as c:
-                    c.execute("SELECT nome_originale FROM persone WHERE id_wikidata = ?", (new_data['id_wikidata'],))
-                    existing = c.fetchone()
-                    existing_name = existing[0] if existing else "Unknown"
-                    logging.warning(f"Duplicate Wikidata ID for '{original_name}': {new_data['id_wikidata']} is already used by '{existing_name}'. This entry will be skipped.")
-            except Exception as lookup_error:
-                logging.error(f"Error while looking up duplicate ID: {lookup_error}")
+             logging.warning(f"Race condition caught: Duplicate ID {new_data['id_wikidata']} for {original_name}")
         else:
             logging.error(f"Integrity Error while inserting data for {original_name}: {e}")
 
