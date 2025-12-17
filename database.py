@@ -13,7 +13,7 @@ class Database:
             conn = sqlite3.connect(self.db_path)
             yield conn
         except sqlite3.Error as e:
-            logging.warning(f"Database error: {e}")
+            logging.error(f"Database error: {e}")
             if conn:
                 conn.rollback()
             raise
